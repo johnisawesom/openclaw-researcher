@@ -26,7 +26,9 @@ async function getEmbedding(text: string): Promise<number[]> {
   }
 
   const pipe = embeddingPipeline;
-  const output = await pipe(text, { pooling: 'mean', normalize: true });
+  // Cast to any to bypass @xenova/transformers strict overload types
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const output = await (pipe as any)(text, { pooling: 'mean', normalize: true });
   const data = output.data as Float32Array;
   return Array.from(data);
 }
