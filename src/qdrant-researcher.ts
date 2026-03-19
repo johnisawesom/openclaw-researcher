@@ -1,5 +1,5 @@
 import { QdrantClient } from '@qdrant/js-client-rest';
-import { pipeline, Pipeline } from '@xenova/transformers';
+import { pipeline } from '@xenova/transformers';
 import { ResearchFinding } from './types.js';
 
 const COLLECTION = 'researcher_logs';
@@ -11,7 +11,8 @@ const qdrant = new QdrantClient({
   apiKey: process.env.QDRANT_API_KEY ?? '',
 });
 
-let embeddingPipeline: Pipeline | null = null;
+type EmbeddingPipeline = Awaited<ReturnType<typeof pipeline>>;
+let embeddingPipeline: EmbeddingPipeline | null = null;
 
 async function getEmbedding(text: string): Promise<number[]> {
   if (!embeddingPipeline) {
@@ -24,7 +25,8 @@ async function getEmbedding(text: string): Promise<number[]> {
     console.log('[Researcher] Embedding model loaded');
   }
 
-  const output = await embeddingPipeline(text, { pooling: 'mean', normalize: true });
+  const pipe = embeddingPipeline;
+  const output = await pipe(text, { pooling: 'mean', normalize: true });
   const data = output.data as Float32Array;
   return Array.from(data);
 }
@@ -59,14 +61,12 @@ async function isDuplicate(embedding: number[], text: string): Promise<boolean> 
     }
     return false;
   } catch {
-    // If search fails, allow upsert — better to have duplicates than miss findings
     return false;
   }
 }
 
 export async function initResearcherMemory(): Promise<void> {
   await ensureCollection();
-  // Pre-warm embedding model on boot
   await getEmbedding('warm up');
   console.log('[Researcher] Memory layer ready');
 }
@@ -75,7 +75,6 @@ export async function storeFinding(finding: ResearchFinding): Promise<boolean> {
   const text = `${finding.title} ${finding.content}`;
   const embedding = await getEmbedding(text);
 
-  // Skip duplicates — no point storing near-identical findings
   const duplicate = await isDuplicate(embedding, text);
   if (duplicate) return false;
 
@@ -90,7 +89,7 @@ export async function storeFinding(finding: ResearchFinding): Promise<boolean> {
           query: finding.query,
           title: finding.title,
           url: finding.url,
-          content: finding.content.slice(0, 500), // Cap content size
+          content: finding.content.slice(0, 500),
           relevanceScore: finding.relevanceScore,
           bot: 'researcher',
         },
