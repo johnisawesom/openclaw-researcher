@@ -1,36 +1,35 @@
 import { QdrantClient } from '@qdrant/js-client-rest';
-import { pipeline } from '@xenova/transformers';
 import { ResearchFinding } from './types.js';
 
 const COLLECTION = 'researcher_logs';
 const VECTOR_SIZE = 384;
 const SIMILARITY_THRESHOLD = 0.95;
+const EMBEDDER_URL = process.env.EMBEDDER_URL!;
 
 const qdrant = new QdrantClient({
   url: process.env.QDRANT_URL ?? '',
   apiKey: process.env.QDRANT_API_KEY ?? '',
 });
 
-type EmbeddingPipeline = Awaited<ReturnType<typeof pipeline>>;
-let embeddingPipeline: EmbeddingPipeline | null = null;
-
 async function getEmbedding(text: string): Promise<number[]> {
-  if (!embeddingPipeline) {
-    console.log('[Researcher] Loading embedding model...');
-    embeddingPipeline = await pipeline(
-      'feature-extraction',
-      'Xenova/all-MiniLM-L6-v2',
-      { quantized: false }
-    );
-    console.log('[Researcher] Embedding model loaded');
+  const response = await fetch(`${EMBEDDER_URL}/embed`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Embedder returned ${response.status}: ${body}`);
   }
 
-  const pipe = embeddingPipeline;
-  // Cast to any to bypass @xenova/transformers strict overload types
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const output = await (pipe as any)(text, { pooling: 'mean', normalize: true });
-  const data = output.data as Float32Array;
-  return Array.from(data);
+  const result = await response.json() as { vector: number[] };
+
+  if (!Array.isArray(result.vector) || result.vector.length !== 384) {
+    throw new Error(`Embedder returned invalid vector length: ${result.vector?.length}`);
+  }
+
+  return result.vector;
 }
 
 async function ensureCollection(): Promise<void> {
