@@ -1,5 +1,6 @@
 import { QdrantClient } from '@qdrant/js-client-rest';
 import { ResearchFinding } from './types.js';
+import { writeToEcosystem } from './ecosystem-memory.js';
 
 const COLLECTION = 'researcher_logs';
 const VECTOR_SIZE = 384;
@@ -17,18 +18,14 @@ async function getEmbedding(text: string): Promise<number[]> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ text }),
   });
-
   if (!response.ok) {
     const body = await response.text();
     throw new Error(`Embedder returned ${response.status}: ${body}`);
   }
-
   const result = await response.json() as { vector: number[] };
-
   if (!Array.isArray(result.vector) || result.vector.length !== 384) {
     throw new Error(`Embedder returned invalid vector length: ${result.vector?.length}`);
   }
-
   return result.vector;
 }
 
@@ -81,23 +78,38 @@ export async function storeFinding(finding: ResearchFinding): Promise<boolean> {
 
   const id = Date.now();
   await qdrant.upsert(COLLECTION, {
-    points: [
-      {
-        id,
-        vector: Array.from(embedding),
-        payload: {
-          timestamp: finding.timestamp,
-          query: finding.query,
-          title: finding.title,
-          url: finding.url,
-          content: finding.content.slice(0, 500),
-          relevanceScore: finding.relevanceScore,
-          bot: 'researcher',
-        },
+    points: [{
+      id,
+      vector: Array.from(embedding),
+      payload: {
+        timestamp: finding.timestamp,
+        query: finding.query,
+        title: finding.title,
+        url: finding.url,
+        content: finding.content.slice(0, 500),
+        relevanceScore: finding.relevanceScore,
+        bot: 'researcher',
       },
-    ],
+    }],
   });
 
   console.log(`[Researcher] Stored finding: "${finding.title.slice(0, 60)}"`);
+
+  writeToEcosystem({
+    bot: 'researcher',
+    type: 'ResearchFinding',
+    title: finding.title,
+    content: finding.content.slice(0, 500),
+    url: finding.url,
+    timestamp: finding.timestamp,
+    metadata: {
+      query: finding.query,
+      relevanceScore: finding.relevanceScore,
+    },
+  }).catch((err: unknown) => {
+    const e = err instanceof Error ? err : new Error(String(err));
+    console.warn(`[Ecosystem] Write failed — not blocking storeFinding: ${e.message}`);
+  });
+
   return true;
 }
