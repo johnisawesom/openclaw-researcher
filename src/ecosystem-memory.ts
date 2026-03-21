@@ -1,7 +1,6 @@
 import { QdrantClient } from '@qdrant/js-client-rest';
 
 const COLLECTION = 'ecosystem_memory';
-const VECTOR_SIZE = 384;
 const EMBEDDER_URL = process.env.EMBEDDER_URL!;
 
 const qdrant = new QdrantClient({
@@ -33,6 +32,7 @@ export interface EcosystemEntry {
   content: string;
   url?: string;
   timestamp: string;
+  ecosystemVersion?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -55,8 +55,9 @@ export async function writeToEcosystem(entry: EcosystemEntry): Promise<void> {
       payload: {
         ...entry,
         timestamp: entry.timestamp || new Date().toISOString(),
+        ecosystemVersion: entry.ecosystemVersion ?? process.env.ECOSYSTEM_VERSION ?? '1.0',
       },
     }],
   });
-  console.log(`[Ecosystem] Written — bot=${entry.bot} type=${entry.type} title="${entry.title.slice(0, 60)}"`);
+  console.log(`[Ecosystem] Written — bot=${entry.bot} type=${entry.type} version=${process.env.ECOSYSTEM_VERSION ?? '1.0'} title="${entry.title.slice(0, 60)}"`);
 }
