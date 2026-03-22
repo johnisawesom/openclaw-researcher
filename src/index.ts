@@ -3,6 +3,7 @@ import { Octokit } from '@octokit/rest';
 import { runWeeklyResearch } from './tavily.js';
 import { initResearcherMemory, storeFinding } from './qdrant-researcher.js';
 import { ResearchFinding, RunResponse, TavilyResult } from './types.js';
+import { callLLM } from './llm-router.js';
 
 const app = express();
 app.use(express.json());
@@ -36,7 +37,6 @@ function buildMarkdownReport(
       continue;
     }
 
-    // Max 3 findings per query — token budget awareness
     const top3 = findings.slice(0, 3);
     for (const finding of top3) {
       lines.push(`### ${finding.title}`);
@@ -65,7 +65,6 @@ async function openReportPR(
   const octokit = new Octokit({ auth: token });
   const branch = `research/weekly-${timestamp.replace(/[:.]/g, '-')}`;
 
-  // Get main SHA
   const { data: mainRef } = await octokit.git.getRef({
     owner: GITHUB_OWNER,
     repo: GITHUB_REPO,
@@ -73,7 +72,6 @@ async function openReportPR(
   });
   const mainSha = mainRef.object.sha;
 
-  // Create branch
   await octokit.git.createRef({
     owner: GITHUB_OWNER,
     repo: GITHUB_REPO,
@@ -81,7 +79,6 @@ async function openReportPR(
     sha: mainSha,
   });
 
-  // Commit markdown report
   const path = `research/report-${timestamp.slice(0, 10)}.md`;
   await octokit.repos.createOrUpdateFileContents({
     owner: GITHUB_OWNER,
@@ -92,7 +89,6 @@ async function openReportPR(
     branch,
   });
 
-  // Open PR
   const { data: pr } = await octokit.pulls.create({
     owner: GITHUB_OWNER,
     repo: GITHUB_REPO,
@@ -105,16 +101,13 @@ async function openReportPR(
   return pr.html_url;
 }
 
-// Health check
 app.get('/health', (_req: Request, res: Response) => {
-  res.json({ status: 'ok', bot: 'openclaw-researcher', version: '1.0.0' });
+  res.json({ status: 'ok', bot: 'openclaw-researcher', version: '1.1.0' });
 });
 
-// Run endpoint — triggered by GitHub Actions weekly cron
 app.post('/run', async (_req: Request, res: Response) => {
   console.log('[Researcher] /run triggered — starting weekly research');
 
-  // Respond immediately — research takes time
   res.status(202).json({
     status: 'ok',
     message: 'Research run started — check logs for progress',
@@ -124,10 +117,8 @@ app.post('/run', async (_req: Request, res: Response) => {
   let findingsStored = 0;
 
   try {
-    // Step 1 — Run Tavily searches
     const results = await runWeeklyResearch();
 
-    // Step 2 — Store findings in Qdrant (deduplicated)
     for (const [query, findings] of results.entries()) {
       for (const finding of findings.slice(0, 3)) {
         const stored = await storeFinding({
@@ -145,10 +136,7 @@ app.post('/run', async (_req: Request, res: Response) => {
 
     console.log(`[Researcher] Stored ${findingsStored} new findings`);
 
-    // Step 3 — Build markdown report
     const markdown = buildMarkdownReport(results, timestamp);
-
-    // Step 4 — Open PR
     const prUrl = await openReportPR(markdown, timestamp);
     console.log(`[Researcher] PR opened: ${prUrl}`);
     console.log(`[Researcher] Run complete — ${findingsStored} findings stored`);
@@ -159,9 +147,9 @@ app.post('/run', async (_req: Request, res: Response) => {
   }
 });
 
-// Boot
 app.listen(parseInt(PORT), '0.0.0.0', async () => {
-  console.log('[Researcher] Boot confirmed — openclaw-researcher v1.0.0');
+  console.log('[Researcher] Boot confirmed — openclaw-researcher v1.1.0');
+  console.log('[Researcher] LLM router loaded — task: research_synthesis');
   console.log(`[Researcher] Health server on port ${PORT}`);
 
   try {
@@ -171,3 +159,5 @@ app.listen(parseInt(PORT), '0.0.0.0', async () => {
     console.error(`[Researcher] Memory init failed: ${e.message}`);
   }
 });
+
+void callLLM;
