@@ -43,6 +43,16 @@ async function ensureCollection(): Promise<void> {
     });
     console.log(`[Researcher] Collection ${COLLECTION} created`);
   }
+
+  try {
+    await qdrant.createPayloadIndex(COLLECTION, {
+      field_name: 'timestamp',
+      field_schema: 'keyword',
+    });
+    console.log(`[Researcher] Payload index on timestamp confirmed`);
+  } catch {
+    console.log(`[Researcher] Payload index on timestamp already exists -- skipping`);
+  }
 }
 
 async function isDuplicate(embedding: number[], text: string): Promise<boolean> {
