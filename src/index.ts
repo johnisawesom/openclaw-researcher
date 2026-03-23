@@ -1,7 +1,7 @@
 import express, { Request, Response } from 'express';
 import { Octokit } from '@octokit/rest';
 import { runWeeklyResearch } from './tavily.js';
-import { initResearcherMemory, storeFinding } from './qdrant-researcher.js';
+import { initResearcherMemory, storeFinding, searchFindings, StoredFinding } from './qdrant-researcher.js';
 import { ResearchFinding, RunResponse, TavilyResult } from './types.js';
 import { callLLM } from './llm-router.js';
 
@@ -101,20 +101,66 @@ async function openReportPR(
   return pr.html_url;
 }
 
+async function synthesiseFindings(
+  findings: StoredFinding[],
+  topic: string
+): Promise<string> {
+  console.log(`[Researcher] synthesiseFindings: topic="${topic.slice(0, 60)}" findings=${findings.length}`);
+
+  if (findings.length === 0) {
+    console.log('[Researcher] synthesiseFindings: no findings to synthesise');
+    return 'No relevant findings available for this topic.';
+  }
+
+  const findingsText = findings
+    .map((f, i) => `[${i + 1}] ${f.title}\nURL: ${f.url}\nSnippet: ${f.snippet}`)
+    .join('\n\n');
+
+  const prompt = `You are a research analyst synthesising findings for the OpenClaw ecosystem.
+
+Topic: ${topic}
+
+Findings:
+${findingsText}
+
+Write a concise synthesis (3-5 sentences) that:
+- Identifies the most important pattern or insight across these findings
+- Notes any contradictions or gaps
+- States what is most actionable for an AI engineering team
+
+Return only the synthesis text. No headers, no bullet points, no preamble.`;
+
+  try {
+    const response = await callLLM({
+      task: 'research_synthesis',
+      prompt,
+      systemPrompt: 'You are a research analyst. Return only the synthesis paragraph, nothing else.',
+      maxTokens: 300,
+    });
+    console.log(`[Researcher] synthesiseFindings: synthesis complete via ${response.provider} using ${response.model}`);
+    return response.text;
+  } catch (err: unknown) {
+    const e = err instanceof Error ? err : new Error(String(err));
+    console.warn(`[Researcher] synthesiseFindings: LLM failed — ${e.message}`);
+    return 'Synthesis unavailable — LLM call failed.';
+  }
+}
+
 app.get('/health', (_req: Request, res: Response) => {
-  res.json({ status: 'ok', bot: 'openclaw-researcher', version: '1.1.0' });
+  res.json({ status: 'ok', bot: 'openclaw-researcher', version: '1.2.0' });
 });
 
 app.post('/run', async (_req: Request, res: Response) => {
-  console.log('[Researcher] /run triggered — starting weekly research');
+  console.log('[Researcher] /run triggered -- starting weekly research');
 
   res.status(202).json({
     status: 'ok',
-    message: 'Research run started — check logs for progress',
+    message: 'Research run started -- check logs for progress',
   });
 
   const timestamp = new Date().toISOString();
   let findingsStored = 0;
+  const allFindings: StoredFinding[] = [];
 
   try {
     const results = await runWeeklyResearch();
@@ -130,16 +176,30 @@ app.post('/run', async (_req: Request, res: Response) => {
           relevanceScore: finding.score,
           bot: 'researcher',
         } as ResearchFinding);
-        if (stored) findingsStored++;
+        if (stored) {
+          findingsStored++;
+          allFindings.push({
+            title: finding.title,
+            url: finding.url,
+            snippet: finding.content.slice(0, 300),
+            publishedAt: timestamp,
+            relevanceScore: finding.score,
+          });
+        }
       }
     }
 
     console.log(`[Researcher] Stored ${findingsStored} new findings`);
 
+    if (allFindings.length > 0) {
+      const synthesis = await synthesiseFindings(allFindings.slice(0, 5), 'weekly AI engineering research');
+      console.log(`[Researcher] Weekly synthesis: ${synthesis.slice(0, 200)}`);
+    }
+
     const markdown = buildMarkdownReport(results, timestamp);
     const prUrl = await openReportPR(markdown, timestamp);
     console.log(`[Researcher] PR opened: ${prUrl}`);
-    console.log(`[Researcher] Run complete — ${findingsStored} findings stored`);
+    console.log(`[Researcher] Run complete -- ${findingsStored} findings stored`);
 
   } catch (err: unknown) {
     const e = err instanceof Error ? err : new Error(String(err));
@@ -147,9 +207,45 @@ app.post('/run', async (_req: Request, res: Response) => {
   }
 });
 
+app.post('/research', async (req: Request, res: Response) => {
+  console.log('[Researcher] /research triggered');
+
+  const body = req.body as Record<string, unknown>;
+  const topic = typeof body['topic'] === 'string' ? body['topic'] : '';
+  const maxAge = typeof body['maxAge'] === 'number' ? body['maxAge'] : 30;
+  const limit = typeof body['limit'] === 'number' ? body['limit'] : 5;
+
+  if (!topic) {
+    res.status(400).json({ error: 'topic is required' });
+    return;
+  }
+
+  console.log(`[Researcher] /research: topic="${topic.slice(0, 60)}" maxAge=${maxAge} limit=${limit}`);
+
+  try {
+    const findings = await searchFindings(topic, limit, maxAge);
+    const fromCache = findings.length > 0;
+
+    console.log(`[Researcher] /research: found ${findings.length} cached findings fromCache=${fromCache}`);
+
+    const synthesis = await synthesiseFindings(findings, topic);
+
+    res.json({
+      findings,
+      fromCache,
+      synthesis,
+    });
+
+  } catch (err: unknown) {
+    const e = err instanceof Error ? err : new Error(String(err));
+    console.error(`[Researcher] /research failed: ${e.message}`);
+    res.status(500).json({ error: 'Research lookup failed', detail: e.message });
+  }
+});
+
 app.listen(parseInt(PORT), '0.0.0.0', async () => {
-  console.log('[Researcher] Boot confirmed — openclaw-researcher v1.1.0');
-  console.log('[Researcher] LLM router loaded — task: research_synthesis');
+  console.log('[Researcher] Boot confirmed -- openclaw-researcher v1.2.0');
+  console.log('[Researcher] LLM router loaded -- task: research_synthesis');
   console.log(`[Researcher] Health server on port ${PORT}`);
 
   try {
@@ -159,5 +255,3 @@ app.listen(parseInt(PORT), '0.0.0.0', async () => {
     console.error(`[Researcher] Memory init failed: ${e.message}`);
   }
 });
-
-void callLLM;
