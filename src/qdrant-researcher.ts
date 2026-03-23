@@ -54,7 +54,7 @@ async function isDuplicate(embedding: number[], text: string): Promise<boolean> 
       with_payload: false,
     });
     if (results.length > 0) {
-      console.log(`[Researcher] Duplicate detected (score > ${SIMILARITY_THRESHOLD}) — skipping: "${text.slice(0, 60)}..."`);
+      console.log(`[Researcher] Duplicate detected (score > ${SIMILARITY_THRESHOLD}) -- skipping: "${text.slice(0, 60)}..."`);
       return true;
     }
     return false;
@@ -108,8 +108,55 @@ export async function storeFinding(finding: ResearchFinding): Promise<boolean> {
     },
   }).catch((err: unknown) => {
     const e = err instanceof Error ? err : new Error(String(err));
-    console.warn(`[Ecosystem] Write failed — not blocking storeFinding: ${e.message}`);
+    console.warn(`[Ecosystem] Write failed -- not blocking storeFinding: ${e.message}`);
   });
 
   return true;
+}
+
+export interface StoredFinding {
+  title: string;
+  url: string;
+  snippet: string;
+  publishedAt: string;
+  relevanceScore: number;
+}
+
+export async function searchFindings(
+  query: string,
+  limit: number = 5,
+  maxAgeDays: number = 30
+): Promise<StoredFinding[]> {
+  console.log(`[Researcher] searchFindings: query="${query.slice(0, 60)}" limit=${limit} maxAgeDays=${maxAgeDays}`);
+
+  const embedding = await getEmbedding(query);
+  const cutoff = new Date(Date.now() - maxAgeDays * 24 * 60 * 60 * 1000).toISOString();
+
+  const results = await qdrant.search(COLLECTION, {
+    vector: embedding,
+    limit,
+    score_threshold: 0.4,
+    with_payload: true,
+    filter: {
+      must: [
+        {
+          key: 'timestamp',
+          range: { gte: cutoff },
+        },
+      ],
+    },
+  });
+
+  console.log(`[Researcher] searchFindings: found ${results.length} matches above threshold`);
+
+  return results.map((r) => {
+    const p = r.payload as Record<string, unknown>;
+    return {
+      title: String(p['title'] ?? ''),
+      url: String(p['url'] ?? ''),
+      snippet: String(p['content'] ?? '').slice(0, 300),
+      publishedAt: String(p['timestamp'] ?? ''),
+      relevanceScore: r.score,
+    };
+  });
 }
