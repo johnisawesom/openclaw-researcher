@@ -144,22 +144,21 @@ export async function searchFindings(
 
   const results = await qdrant.search(COLLECTION, {
     vector: embedding,
-    limit,
+    limit: limit * 3,
     score_threshold: 0.4,
     with_payload: true,
-    filter: {
-      must: [
-        {
-          key: 'timestamp',
-          range: { gte: cutoff },
-        },
-      ],
-    },
   });
 
-  console.log(`[Researcher] searchFindings: found ${results.length} matches above threshold`);
+  const filtered = results.filter((r) => {
+    const p = r.payload as Record<string, unknown>;
+    const ts = String(p['timestamp'] ?? '');
+    return ts >= cutoff;
+  });
 
-  return results.map((r) => {
+  const trimmed = filtered.slice(0, limit);
+  console.log(`[Researcher] searchFindings: ${results.length} raw results, ${filtered.length} within age window, returning ${trimmed.length}`);
+
+  return trimmed.map((r) => {
     const p = r.payload as Record<string, unknown>;
     return {
       title: String(p['title'] ?? ''),
