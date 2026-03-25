@@ -8,7 +8,7 @@ const WEEKLY_QUERIES = [
   'vector database memory techniques AI agents',
 ];
 
-async function searchTavily(query: string): Promise<TavilyResult[]> {
+export async function searchTavily(query: string): Promise<TavilyResult[]> {
   const apiKey = process.env.TAVILY_API_KEY;
   if (!apiKey) {
     throw new Error('TAVILY_API_KEY environment variable not set');
