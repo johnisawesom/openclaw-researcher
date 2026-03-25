@@ -1,6 +1,6 @@
 import express, { Request, Response } from 'express';
 import { Octokit } from '@octokit/rest';
-import { runWeeklyResearch } from './tavily.js';
+import { runWeeklyResearch, searchTavily } from './tavily.js';
 import { initResearcherMemory, storeFinding, searchFindings, StoredFinding } from './qdrant-researcher.js';
 import { ResearchFinding, RunResponse, TavilyResult } from './types.js';
 import { callLLM } from './llm-router.js';
@@ -147,7 +147,7 @@ Return only the synthesis text. No headers, no bullet points, no preamble.`;
 }
 
 app.get('/health', (_req: Request, res: Response) => {
-  res.json({ status: 'ok', bot: 'openclaw-researcher', version: '1.2.0' });
+  res.json({ status: 'ok', bot: 'openclaw-researcher', version: '1.2.1' });
 });
 
 app.post('/run', async (_req: Request, res: Response) => {
@@ -223,10 +223,34 @@ app.post('/research', async (req: Request, res: Response) => {
   console.log(`[Researcher] /research: topic="${topic.slice(0, 60)}" maxAge=${maxAge} limit=${limit}`);
 
   try {
-    const findings = await searchFindings(topic, limit, maxAge);
+    let findings = await searchFindings(topic, limit, maxAge);
     const fromCache = findings.length > 0;
 
     console.log(`[Researcher] /research: found ${findings.length} cached findings fromCache=${fromCache}`);
+
+    if (findings.length === 0) {
+      console.log(`[Researcher] /research: cache empty -- calling Tavily live for "${topic.slice(0, 60)}"`);
+      try {
+        const liveResults = await searchTavily(topic);
+        const timestamp = new Date().toISOString();
+        for (const result of liveResults.slice(0, limit)) {
+          await storeFinding({
+            timestamp,
+            query: topic,
+            title: result.title,
+            url: result.url,
+            content: result.content,
+            relevanceScore: result.score,
+            bot: 'researcher',
+          } as ResearchFinding);
+        }
+        findings = await searchFindings(topic, limit, maxAge);
+        console.log(`[Researcher] /research: Tavily returned ${liveResults.length} results, now have ${findings.length} findings`);
+      } catch (tavilyErr: unknown) {
+        const te = tavilyErr instanceof Error ? tavilyErr : new Error(String(tavilyErr));
+        console.error(`[Researcher] /research: Tavily fallback failed -- ${te.message}`);
+      }
+    }
 
     const synthesis = await synthesiseFindings(findings, topic);
 
@@ -244,7 +268,7 @@ app.post('/research', async (req: Request, res: Response) => {
 });
 
 app.listen(parseInt(PORT), '0.0.0.0', async () => {
-  console.log('[Researcher] Boot confirmed -- openclaw-researcher v1.2.0');
+  console.log('[Researcher] Boot confirmed -- openclaw-researcher v1.2.1');
   console.log('[Researcher] LLM router loaded -- task: research_synthesis');
   console.log(`[Researcher] Health server on port ${PORT}`);
 
