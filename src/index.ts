@@ -13,6 +13,16 @@ const PORT = process.env.PORT ?? '8080';
 const GITHUB_OWNER = process.env.GITHUB_OWNER ?? '';
 const GITHUB_REPO = process.env.GITHUB_REPO ?? '';
 
+function sanitiseForLLM(text: string): string {
+  // Remove unpaired Unicode surrogates that cause Anthropic API
+  // to reject the request body as invalid JSON (HTTP 400)
+  // Tavily snippets frequently contain emoji with broken surrogate pairs
+  return text
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, '')
+    .replace(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
+    .trim();
+}
 function buildMarkdownReport(
   results: Map<string, TavilyResult[]>,
   timestamp: string
@@ -112,9 +122,10 @@ async function synthesiseFindings(
     return 'No relevant findings available for this topic.';
   }
 
-  const findingsText = findings
-    .map((f, i) => `[${i + 1}] ${f.title}\nURL: ${f.url}\nSnippet: ${f.snippet}`)
-    .join('\n\n');
+  // AFTER
+const findingsText = findings
+  .map((f, i) => `[${i + 1}] ${sanitiseForLLM(f.title)}\nURL: ${f.url}\nSnippet: ${sanitiseForLLM(f.snippet)}`)
+  .join('\n\n');
 
   const prompt = `You are a research analyst synthesising findings for the OpenClaw ecosystem.
 
@@ -147,7 +158,7 @@ Return only the synthesis text. No headers, no bullet points, no preamble.`;
 }
 
 app.get('/health', (_req: Request, res: Response) => {
-  res.json({ status: 'ok', bot: 'openclaw-researcher', version: '1.2.1' });
+  res.json({ status: 'ok', bot: 'openclaw-researcher', version: '1.2.2' });
 });
 
 app.post('/run', async (_req: Request, res: Response) => {
